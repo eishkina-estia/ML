@@ -4,6 +4,8 @@ from sklearn.base import BaseEstimator
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import mean_squared_error
 from tqdm.notebook import trange, tqdm
+import itertools
+import random
 
 def train_test_split(data, user_col, item_col, rating_col, time_col, test_size=0.25):
 
@@ -48,15 +50,18 @@ class CollaborativeFiltering(BaseEstimator):
         self.user_based = user_based
         return
 
-    def fit(self, X, y, user_col='userId', item_col='movieId'):
+    def fit(self, X, y, user_col, item_col):
 
         X = X.copy()
 
         # add target as column to X
         X['y'] = y
 
+        self.user_col = user_col
+        self.item_col = item_col
         self.users = X[user_col].unique()
         self.items = X[item_col].unique()
+        self.non_zero_ratings = X[[user_col, item_col]].set_index([user_col, item_col])
 
         if self.user_based:
             # users x items matrix
@@ -156,12 +161,51 @@ class CollaborativeFiltering(BaseEstimator):
 
         return prediction
 
-    def predict(self, X, user_col='userId', item_col='movieId', sim_threshhold=None):
+    def predict(self, X, sim_threshhold=None):
         # y = X[[user_col, item_col]].apply(lambda row: self.predict_rating(row[user_col], row[item_col], sim_threshhold), axis=1)
-        X_np = X[[user_col, item_col]].values
+        X_np = X[[self.user_col, self.item_col]].values
         i = 0
         y = np.zeros(len(X_np))
-        for row in tqdm(X_np, desc='Predictions'):
+        for row in tqdm(X_np, desc='predictions'):
             y[i] = self.predict_rating(row[0], row[1], sim_threshhold)
             i += 1
         return y
+
+    def mean_precision_at_k(self, X_test, y_test, k, nb_random_users=None):
+
+        if nb_random_users is None:
+            selected_users = self.users.tolist()
+        else:
+            selected_users = random.sample(self.users.tolist(), nb_random_users)
+
+        # all possible permutations
+        X_test_all = pd.DataFrame(itertools.product(selected_users, self.items), columns=[self.user_col, self.item_col]).set_index([self.user_col, self.item_col])
+
+        # remove permutations from self.non_zero_ratings - used in fit
+        drop_permutations = X_test_all.index.intersection(self.non_zero_ratings.index)
+        X_test_all = X_test_all.drop(drop_permutations).reset_index()
+
+        y_pred_all = self.predict(X_test_all)
+
+        col_rating = 'rating'
+        y_pred_all = pd.Series(data=y_pred_all)
+        data_pred = pd.concat([X_test_all[[self.user_col, self.item_col]], y_pred_all.rename(col_rating)], axis=1)
+        data_test = pd.concat([X_test[[self.user_col, self.item_col]], y_test.rename(col_rating)], axis=1)
+
+        # sort predicted ratings
+        data_pred = data_pred.sort_values(col_rating, ascending=False)
+
+        precision_by_user = {}
+        for u in tqdm(selected_users, desc='users'):
+            R_u_k = data_pred.loc[data_pred[self.user_col] == u, self.item_col][:k]
+            L_u = data_test.loc[data_test[self.user_col] == u, self.item_col]
+            if len(R_u_k) != 0:
+                precision_by_user[u] = sum(np.isin(R_u_k, L_u)) / len(R_u_k)
+            else:
+                precision_by_user[u] = 0
+
+        precision_by_user = pd.Series(precision_by_user)
+        mean_precision = np.mean(precision_by_user)
+
+        return mean_precision, precision_by_user
+
