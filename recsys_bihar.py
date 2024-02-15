@@ -38,6 +38,7 @@ def train_test_split(data, user_col, item_col, rating_col, time_col, test_size=0
 class CollaborativeFiltering(BaseEstimator):
 
     sim_methods = ['cosine', 'pearson']
+    rating_col = 'rating'
 
     def __init__(self, sim_method="cosine", user_based=False):
 
@@ -171,6 +172,26 @@ class CollaborativeFiltering(BaseEstimator):
             i += 1
         return y
 
+    def get_recommended_items(self, user, k=None):
+
+        if user not in self.users:
+            return pd.DataFrame(columns=[self.item_col, self.rating_col])
+
+        # all possible permutations
+        user_items = pd.DataFrame(itertools.product([user], self.items), columns=[self.user_col, self.item_col]).set_index([self.user_col, self.item_col])
+
+        # remove permutations from self.non_zero_ratings - used in fit
+        drop_permutations = user_items.index.intersection(self.non_zero_ratings.index)
+        user_items = user_items.drop(drop_permutations).reset_index()
+
+        y_pred = pd.Series(self.predict(user_items)).rename(self.rating_col)
+
+        recommended_items = pd.concat([user_items[self.item_col],y_pred], axis=1).sort_values(self.rating_col, ascending=False)
+        if k is not None:
+            recommended_items = recommended_items[:k]
+
+        return recommended_items
+
     def mean_precision_at_k(self, X_test, y_test, k, nb_random_users=None):
 
         if nb_random_users is None:
@@ -187,13 +208,12 @@ class CollaborativeFiltering(BaseEstimator):
 
         y_pred_all = self.predict(X_test_all)
 
-        col_rating = 'rating'
         y_pred_all = pd.Series(data=y_pred_all)
-        data_pred = pd.concat([X_test_all[[self.user_col, self.item_col]], y_pred_all.rename(col_rating)], axis=1)
-        data_test = pd.concat([X_test[[self.user_col, self.item_col]], y_test.rename(col_rating)], axis=1)
+        data_pred = pd.concat([X_test_all[[self.user_col, self.item_col]], y_pred_all.rename(self.rating_col)], axis=1)
+        data_test = pd.concat([X_test[[self.user_col, self.item_col]], y_test.rename(self.rating_col)], axis=1)
 
         # sort predicted ratings
-        data_pred = data_pred.sort_values(col_rating, ascending=False)
+        data_pred = data_pred.sort_values(self.rating_col, ascending=False)
 
         precision_by_user = {}
         for u in tqdm(selected_users, desc='users'):
