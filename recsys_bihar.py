@@ -215,17 +215,24 @@ class CollaborativeFiltering(BaseEstimator):
         # sort predicted ratings
         data_pred = data_pred.sort_values(self.rating_col, ascending=False)
 
+        recommendations_by_user = {}
         precision_by_user = {}
+
         for u in tqdm(selected_users, desc='users'):
             R_u_k = data_pred.loc[data_pred[self.user_col] == u, self.item_col][:k]
             L_u = data_test.loc[data_test[self.user_col] == u, self.item_col]
+            recommendations_by_user[u] = R_u_k.tolist()
+
             if len(R_u_k) != 0:
                 precision_by_user[u] = sum(np.isin(R_u_k, L_u)) / len(R_u_k)
             else:
                 precision_by_user[u] = 0
 
-        precision_by_user = pd.Series(precision_by_user)
+        recommendations_by_user = pd.Series(recommendations_by_user, name='recommendations')
+        precision_by_user = pd.Series(precision_by_user, name='precision')
+        res = pd.concat([recommendations_by_user, precision_by_user], axis=1)
+
         mean_precision = np.mean(precision_by_user)
 
-        return mean_precision, precision_by_user
+        return mean_precision, res
 
